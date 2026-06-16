@@ -2,7 +2,8 @@
 
 一个 macOS 桌面小工具，用来把网易云音乐的 `.ncm` 缓存文件转换为可播放的音频文件。
 
-![App icon](public/app-icon.png)
+![App icon](public/app-icon.png)<img width="1880" height="1360" alt="1" src="https://github.com/user-attachments/assets/92147654-772d-4f79-a470-fdcf8a3b2a14" />
+
 
 ## 功能
 
