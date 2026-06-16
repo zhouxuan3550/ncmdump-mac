@@ -1,0 +1,399 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ----------------------------------------------------------------------
+   Design tokens.
+   All UI colors are expressed as `<r> <g> <b>` triples so Tailwind's
+   `bg-card/70` alpha-modifier syntax works automatically.
+   ---------------------------------------------------------------------- */
+
+:root {
+	color-scheme: light dark;
+
+	/* Light theme (default). */
+	--bg-canvas: 255 255 255;
+	--bg-app: 250 250 252;
+	--bg-surface: 255 255 255;
+	--bg-surface-2: 244 244 245;
+	--bg-elevated: 255 255 255;
+	--bg-inverse: 24 24 27;
+	--bg-overlay: 255 255 255;
+
+	--text-primary: 24 24 27;
+	--text-secondary: 63 63 70;
+	--text-muted: 113 113 122;
+	--text-faint: 161 161 170;
+	--text-on-accent: 255 255 255;
+
+	--border-subtle: 228 228 231;
+	--border-default: 212 212 216;
+	--border-strong: 161 161 170;
+
+	--shadow-color: 15 15 20;
+
+	--highlight-color: 0 0 0;
+	--highlight-alpha: 0.06;
+
+	--accent: 225 50 60;
+	--accent-2: 235 100 75;
+	--accent-glow: 225 50 60;
+
+	--good: 22 163 74;
+	--bad: 220 38 38;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg-canvas: 0 0 0;
+		--bg-app: 22 22 25;
+		--bg-surface: 28 28 31;
+		--bg-surface-2: 33 33 36;
+		--bg-elevated: 44 44 48;
+		--bg-inverse: 244 244 245;
+		--bg-overlay: 24 24 27;
+
+		--text-primary: 244 241 237;
+		--text-secondary: 212 212 216;
+		--text-muted: 161 161 170;
+		--text-faint: 113 113 122;
+		--text-on-accent: 255 255 255;
+
+		--border-subtle: 255 255 255;
+		--border-default: 255 255 255;
+		--border-strong: 161 161 170;
+
+		--shadow-color: 0 0 0;
+
+		--highlight-color: 255 255 255;
+		--highlight-alpha: 0.06;
+
+		--accent: 255 90 95;
+		--accent-2: 255 138 102;
+		--accent-glow: 255 90 95;
+
+		--good: 132 204 142;
+		--bad: 255 154 132;
+	}
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	min-height: 100%;
+	margin: 0;
+	color: rgb(var(--text-primary));
+	font-family:
+		-apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+		"PingFang SC", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+	font-feature-settings: "ss01", "cv11", "tnum";
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	text-rendering: optimizeLegibility;
+}
+
+body {
+	/* The window background is provided by macOS NSVisualEffectView
+	   (AppearanceBased) when running in Tauri. Keeping `body` transparent
+	   lets the system glass show through; in a normal browser the next
+	   viewport stays white. */
+	background: transparent;
+}
+
+button,
+input {
+	font: inherit;
+	color: inherit;
+}
+
+button,
+label {
+	-webkit-app-region: no-drag;
+}
+
+[data-tauri-drag-region] {
+	-webkit-app-region: drag;
+}
+
+button,
+input,
+label,
+[role="button"],
+[role="switch"],
+[role="tab"] {
+	-webkit-app-region: no-drag;
+}
+
+/* ----------------------------------------------------------------------
+   Focus ring. WKWebView on macOS draws a system blue halo by default when
+   any element is keyboard-focused, which clashes with the rest of the
+   palette. We disable the default outline on every interactive element
+   and re-implement a single accent-coloured focus-visible ring so Tab
+   navigation stays visible and on-brand.
+   ---------------------------------------------------------------------- */
+
+button,
+input,
+label,
+[role="button"],
+[role="switch"],
+[role="tab"] {
+	outline: none;
+}
+
+button:focus-visible,
+input:focus-visible,
+label:focus-visible,
+[role="button"]:focus-visible,
+[role="switch"]:focus-visible,
+[role="tab"]:focus-visible {
+	outline: 1px solid rgb(var(--highlight-color) / 0.28);
+	outline-offset: 3px;
+	border-radius: inherit;
+}
+
+/* Same treatment for the two decorative inputs that fake a switch knob
+   inside <ToggleCard>: the hidden <input> still owns the focus. */
+input:focus-visible + span,
+input:focus-visible ~ span {
+	outline: 1px solid rgb(var(--highlight-color) / 0.28);
+	outline-offset: 2px;
+}
+
+input[type="checkbox"] {
+	color-scheme: inherit;
+}
+
+::selection {
+	color: rgb(var(--text-on-accent));
+	background: rgb(var(--accent));
+}
+
+/* ----------------------------------------------------------------------
+   Theme utilities. The `/ <alpha-value>` placeholder lets Tailwind's
+   `bg-card/70` syntax work: Tailwind rewrites it to `rgb(... / 0.7)` at
+   build time.
+   ---------------------------------------------------------------------- */
+
+@layer utilities {
+	.bg-canvas    { background-color: rgb(var(--bg-canvas) / <alpha-value>); }
+	.bg-app       { background-color: rgb(var(--bg-app) / <alpha-value>); }
+	.bg-card      { background-color: rgb(var(--bg-surface) / <alpha-value>); }
+	.bg-well      { background-color: rgb(var(--bg-surface-2) / <alpha-value>); }
+	.bg-elevated  { background-color: rgb(var(--bg-elevated) / <alpha-value>); }
+	.bg-inverse   { background-color: rgb(var(--bg-inverse) / <alpha-value>); }
+	.bg-overlay   { background-color: rgb(var(--bg-overlay) / <alpha-value>); }
+
+	.text-primary   { color: rgb(var(--text-primary) / <alpha-value>); }
+	.text-secondary { color: rgb(var(--text-secondary) / <alpha-value>); }
+	.text-muted     { color: rgb(var(--text-muted) / <alpha-value>); }
+	.text-faint     { color: rgb(var(--text-faint) / <alpha-value>); }
+	.text-on-accent { color: rgb(var(--text-on-accent) / <alpha-value>); }
+	.text-accent    { color: rgb(var(--accent) / <alpha-value>); }
+	.text-accent-2  { color: rgb(var(--accent-2) / <alpha-value>); }
+	.text-good      { color: rgb(var(--good) / <alpha-value>); }
+	.text-bad       { color: rgb(var(--bad) / <alpha-value>); }
+
+	.border-subtle   { border-color: rgb(var(--border-subtle) / <alpha-value>); }
+	.border-default  { border-color: rgb(var(--border-default) / <alpha-value>); }
+	.border-strong   { border-color: rgb(var(--border-strong) / <alpha-value>); }
+	.border-accent   { border-color: rgb(var(--accent) / <alpha-value>); }
+
+	.bg-accent    { background-color: rgb(var(--accent) / <alpha-value>); }
+	.bg-accent-2  { background-color: rgb(var(--accent-2) / <alpha-value>); }
+	.bg-good      { background-color: rgb(var(--good) / <alpha-value>); }
+	.bg-bad       { background-color: rgb(var(--bad) / <alpha-value>); }
+
+	/* Ring is driven by --tw-ring-color. Tailwind already sets the box-shadow
+	   machinery; we only need to feed it the right color. */
+	.ring-app     { --tw-ring-color: rgb(var(--border-subtle) / <alpha-value>); }
+	.ring-default { --tw-ring-color: rgb(var(--border-default) / <alpha-value>); }
+	.ring-subtle  { --tw-ring-color: rgb(var(--border-subtle) / <alpha-value>); }
+	.ring-accent  { --tw-ring-color: rgb(var(--accent) / <alpha-value>); }
+	.ring-good    { --tw-ring-color: rgb(var(--good) / <alpha-value>); }
+	.ring-bad     { --tw-ring-color: rgb(var(--bad) / <alpha-value>); }
+}
+
+/* Reusable surfaces with backdrop blur. The translucent fill sits on top of
+   the macOS NSVisualEffectView when running inside the Tauri window, so
+   even a solid colour backdrop looks "glass". */
+.glass-highlight {
+	box-shadow:
+		inset 0 1px 0 rgb(var(--highlight-color) / 0.14),
+		inset 0 0 0 1px rgb(var(--highlight-color) / 0.035),
+		0 18px 60px rgb(var(--shadow-color) / 0.18);
+}
+
+.surface-card {
+	background-color: rgb(var(--bg-surface) / 0.18);
+	backdrop-filter: blur(44px) saturate(190%);
+	-webkit-backdrop-filter: blur(44px) saturate(190%);
+}
+
+.surface-deep {
+	background-color: rgb(var(--bg-surface-2) / 0.2);
+	backdrop-filter: blur(42px) saturate(180%);
+	-webkit-backdrop-filter: blur(42px) saturate(180%);
+}
+
+.app-shell {
+	background: transparent;
+}
+
+.soft-ring {
+	box-shadow:
+		inset 0 1px 0 rgb(var(--highlight-color) / 0.14),
+		inset 0 0 0 1px rgb(var(--highlight-color) / 0.055);
+}
+
+.active-glow {
+	box-shadow:
+		inset 0 1px 0 rgb(var(--highlight-color) / 0.14),
+		inset 0 0 0 1px rgb(var(--highlight-color) / 0.07);
+}
+
+.glass-frame,
+.accent-frame {
+	position: relative;
+	isolation: isolate;
+}
+
+.glass-frame::before,
+.accent-frame::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	border-radius: inherit;
+	padding: 1px;
+	pointer-events: none;
+	-webkit-mask:
+		linear-gradient(#000 0 0) content-box,
+		linear-gradient(#000 0 0);
+	-webkit-mask-composite: xor;
+	mask-composite: exclude;
+}
+
+.glass-frame::before {
+	background:
+		linear-gradient(145deg,
+			rgb(var(--highlight-color) / 0.28),
+			rgb(var(--highlight-color) / 0.06) 32%,
+			rgb(var(--accent) / 0.12) 70%,
+			rgb(var(--accent-2) / 0.18));
+}
+
+.accent-frame::before {
+	background:
+		linear-gradient(135deg,
+			rgb(var(--accent) / 0.55),
+			rgb(var(--accent-2) / 0.3) 38%,
+			rgb(var(--highlight-color) / 0.1) 72%,
+			rgb(var(--accent) / 0.36));
+}
+
+.output-focus {
+	background: rgb(var(--accent) / 0.055);
+	box-shadow:
+		inset 0 1px 0 rgb(var(--highlight-color) / 0.18),
+		inset 0 0 0 1px rgb(var(--accent) / 0.28),
+		0 18px 48px rgb(var(--shadow-color) / 0.14);
+}
+
+.priority-action {
+	background: rgb(var(--accent) / 0.055);
+	box-shadow:
+		inset 0 1px 0 rgb(var(--highlight-color) / 0.16),
+		inset 0 0 0 1px rgb(var(--accent) / 0.28),
+		0 12px 32px rgb(var(--shadow-color) / 0.12);
+}
+
+.priority-action::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 18px;
+	bottom: 18px;
+	width: 3px;
+	border-radius: 999px;
+	background: rgb(var(--accent) / 0.9);
+	box-shadow: 0 0 18px rgb(var(--accent-glow) / 0.32);
+}
+
+.priority-action:hover {
+	background: rgb(var(--accent) / 0.08);
+}
+
+.nav-priority {
+	position: relative;
+	background: rgb(var(--accent) / 0.055);
+	box-shadow:
+		inset 0 1px 0 rgb(var(--highlight-color) / 0.14),
+		inset 0 0 0 1px rgb(var(--accent) / 0.3);
+}
+
+.nav-priority::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	top: 9px;
+	bottom: 9px;
+	width: 3px;
+	border-radius: 999px;
+	background: rgb(var(--accent) / 0.92);
+	box-shadow: 0 0 14px rgb(var(--accent-glow) / 0.28);
+}
+
+.step-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 30px;
+	height: 22px;
+	border-radius: 999px;
+	background: rgb(var(--accent) / 0.16);
+	color: rgb(var(--accent));
+	font-size: 10px;
+	font-weight: 800;
+	letter-spacing: 0;
+	box-shadow:
+		inset 0 1px 0 rgb(var(--highlight-color) / 0.16),
+		inset 0 0 0 1px rgb(var(--accent) / 0.22);
+}
+
+.quiet-option {
+	opacity: 0.78;
+}
+
+.quiet-option:hover {
+	opacity: 1;
+}
+
+/* Subtle scrollbars that don't shout in either theme. */
+*::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+	background: rgb(var(--text-faint) / 0.35);
+	border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+	background: rgb(var(--text-muted) / 0.6);
+}
+*::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

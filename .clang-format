@@ -1,0 +1,17 @@
+# C++ formatting rules. C++17 code in this project uses tabs in some legacy
+# files but new code follows this style; run `clang-format -i` on changed
+# files before sending a PR.
+---
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+UseTab: Never
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+PointerAlignment: Right
+SortIncludes: true
+IncludeBlocks: Preserve
+Language: Cpp
+Standard: c++17
