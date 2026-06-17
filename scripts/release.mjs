@@ -31,7 +31,7 @@ if (!process.env.ALLOW_DIRTY_RELEASE) {
 }
 
 run("gh", ["auth", "status"]);
-run("npm", ["run", "desktop:build"]);
+run("npm", ["run", arch === "x86_64" ? "desktop:build:x86_64" : "desktop:build"]);
 ensure(existsSync(sourceDmg), `DMG 不存在：${sourceDmg}`);
 run("hdiutil", ["verify", sourceDmg]);
 

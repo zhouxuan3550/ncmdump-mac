@@ -16,5 +16,5 @@
     "plugins": [{ "name": "next" }]
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", "build", "src-tauri/target", "src-tauri/binaries"]
+  "exclude": ["node_modules", "build", "third_party", "src-tauri/target", "src-tauri/binaries"]
 }

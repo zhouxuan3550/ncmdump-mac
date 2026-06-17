@@ -18,6 +18,7 @@ pnpm-debug.log*
 build/
 cmake-build-*/
 vcpkg_installed/
+third_party/
 ncmdump
 *.exe
 *.dylib

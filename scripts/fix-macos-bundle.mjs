@@ -10,7 +10,11 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url)).replace(/\/scripts$/, "");
-const appPath = join(root, "src-tauri", "target", "release", "bundle", "macos", "NCM 转换器.app");
+const targetTriple = process.env.TAURI_ENV_TARGET_TRIPLE;
+const bundleRoot = targetTriple
+	? join(root, "src-tauri", "target", targetTriple, "release", "bundle")
+	: join(root, "src-tauri", "target", "release", "bundle");
+const appPath = join(bundleRoot, "macos", "NCM 转换器.app");
 const resourcesPath = join(appPath, "Contents", "Resources");
 const sidecarPath = join(appPath, "Contents", "MacOS", "ncmdump");
 

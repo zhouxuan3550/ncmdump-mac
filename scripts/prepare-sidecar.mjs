@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url)).replace(/\/scripts$/, "");
 const buildDir = join(root, "build");
 const sidecarDir = join(root, "src-tauri", "binaries");
+const targetTriple = process.env.TAURI_ENV_TARGET_TRIPLE;
 
 function run(cmd, args, opts = {}) {
 	return execFileSync(cmd, args, { stdio: "inherit", ...opts });
@@ -38,11 +39,24 @@ function buildArch(arch) {
 	mkdirSync(archDir, { recursive: true });
 	const archFlag =
 		arch === "arm64" ? "-DCMAKE_OSX_ARCHITECTURES=arm64" : "-DCMAKE_OSX_ARCHITECTURES=x86_64";
-	run("cmake", ["-DCMAKE_BUILD_TYPE=Release", archFlag, "-S", root, "-B", archDir]);
+	const args = ["-DCMAKE_BUILD_TYPE=Release", archFlag, "-S", root, "-B", archDir];
+	const prefix = taglibPrefix();
+	if (prefix) args.unshift(`-DCMAKE_PREFIX_PATH=${prefix}`);
+	run("cmake", args);
 	run("cmake", ["--build", archDir, "-j"]);
 	const binary = join(archDir, "ncmdump");
 	ensure(existsSync(binary), `build for ${arch} did not produce ${binary}`);
 	return binary;
+}
+
+function taglibPrefix() {
+	const explicit = process.env.CMAKE_PREFIX_PATH
+		?.split(":")
+		.find((prefix) => existsSync(join(prefix, "lib", "libtag.2.dylib")));
+	if (explicit) return explicit;
+
+	const taglibPath = runOrNull("brew", ["--prefix", "taglib"]);
+	return taglibPath?.trim() || null;
 }
 
 // Probe whether the installed taglib can satisfy a given architecture. On
@@ -50,9 +64,9 @@ function buildArch(arch) {
 // of failing the link step.
 function taglibSupportsArch(arch) {
 	if (process.platform !== "darwin") return true;
-	const taglibPath = runOrNull("brew", ["--prefix", "taglib"]);
-	if (!taglibPath) return true; // can't tell — let the link step decide.
-	const lib = join(taglibPath.trim(), "lib", "libtag.2.dylib");
+	const prefix = taglibPrefix();
+	if (!prefix) return true; // can't tell — let the link step decide.
+	const lib = join(prefix, "lib", "libtag.2.dylib");
 	if (!existsSync(lib)) return true;
 	const info = runOrNull("lipo", ["-info", lib]);
 	if (!info) return true;
@@ -81,11 +95,10 @@ function detectHost() {
 }
 
 function tripleForArch(arch) {
-	const host = process.env.TAURI_ENV_TARGET_TRIPLE;
-	if (host) return host;
+	if (targetTriple) return targetTriple;
 	if (arch === "arm64") return "aarch64-apple-darwin";
 	if (arch === "x86_64") return "x86_64-apple-darwin";
-	return host;
+	return arch;
 }
 
 function installSidecar(binary, arch) {
@@ -120,8 +133,17 @@ function main() {
 	mkdirSync(buildDir, { recursive: true });
 
 	const isMac = process.platform === "darwin";
+	const requestedArch = targetTriple?.startsWith("x86_64")
+		? "x86_64"
+		: targetTriple?.startsWith("aarch64")
+			? "arm64"
+			: null;
 
-	if (isMac && process.env.UNIVERSAL !== "0") {
+	if (requestedArch) {
+		const binary = maybeBuildArch(requestedArch);
+		ensure(binary, `Unable to build sidecar for ${targetTriple}`);
+		installSidecar(binary, requestedArch);
+	} else if (isMac && process.env.UNIVERSAL !== "0") {
 		const arm64 = maybeBuildArch("arm64");
 		const x64 = maybeBuildArch("x86_64");
 		if (arm64) installSidecar(arm64, "arm64");

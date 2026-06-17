@@ -9,14 +9,18 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url)).replace(/\/scripts$/, "");
-const appPath = join(root, "src-tauri", "target", "release", "bundle", "macos", "NCM 转换器.app");
+const targetTriple = process.env.TAURI_ENV_TARGET_TRIPLE;
+const bundleRoot = targetTriple
+	? join(root, "src-tauri", "target", targetTriple, "release", "bundle")
+	: join(root, "src-tauri", "target", "release", "bundle");
+const appPath = join(bundleRoot, "macos", "NCM 转换器.app");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
 const version = process.env.BUNDLE_VERSION ?? pkg.version;
 const arch = process.env.BUNDLE_ARCH ?? (process.arch === "arm64" ? "aarch64" : process.arch);
 const volName = process.env.DMG_VOL_NAME ?? "NCM 转换器";
 
-const stagingDir = join(root, "src-tauri", "target", "release", "bundle", "dmg-staging");
+const stagingDir = join(root, "src-tauri", "target", "release", "bundle", `dmg-staging-${arch}`);
 const dmgDir = join(root, "src-tauri", "target", "release", "bundle", "dmg");
 const dmgName = `${volName}_${version}_${arch}.dmg`;
 const dmgPath = join(dmgDir, dmgName);

@@ -22,9 +22,10 @@
 
 请到 GitHub Releases 下载最新版 DMG：
 
-- `NCM 转换器_1.0.0_aarch64.dmg`
+- Apple Silicon：`NCM-Converter-1.0.0-aarch64.dmg`
+- Intel：`NCM-Converter-1.0.0-x86_64.dmg`
 
-当前构建面向 Apple Silicon Mac。
+按自己的 Mac 芯片选择对应版本。
 
 ## 技术架构
 
