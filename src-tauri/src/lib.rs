@@ -1,5 +1,6 @@
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,6 +29,10 @@ struct ConvertRequest {
     output_dir: Option<String>,
     recursive: bool,
     remove_original: bool,
+    #[serde(default = "default_duplicate_policy")]
+    duplicate_policy: DuplicatePolicy,
+    #[serde(default)]
+    organize_policy: OrganizePolicy,
     #[serde(default)]
     jobs: Option<u32>,
 }
@@ -45,6 +50,14 @@ struct AppSettings {
     jobs: u32,
     #[serde(default = "default_true")]
     auto_scan_default: bool,
+    #[serde(default = "default_true")]
+    watch_default_cache: bool,
+    #[serde(default)]
+    auto_reveal_output: bool,
+    #[serde(default = "default_duplicate_policy")]
+    duplicate_policy: DuplicatePolicy,
+    #[serde(default)]
+    organize_policy: OrganizePolicy,
 }
 
 impl Default for AppSettings {
@@ -55,8 +68,29 @@ impl Default for AppSettings {
             remove_original: false,
             jobs: default_jobs(),
             auto_scan_default: true,
+            watch_default_cache: true,
+            auto_reveal_output: false,
+            duplicate_policy: default_duplicate_policy(),
+            organize_policy: OrganizePolicy::None,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum DuplicatePolicy {
+    Rename,
+    Skip,
+    Overwrite,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "lowercase")]
+enum OrganizePolicy {
+    #[default]
+    None,
+    Artist,
+    Album,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -101,6 +135,10 @@ fn default_jobs() -> u32 {
     2
 }
 
+fn default_duplicate_policy() -> DuplicatePolicy {
+    DuplicatePolicy::Rename
+}
+
 #[derive(Debug, Deserialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 enum ConvertMode {
@@ -113,6 +151,9 @@ enum ConvertMode {
 struct ConversionResult {
     source: String,
     output: Option<String>,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
     success: bool,
     message: String,
 }
@@ -161,6 +202,12 @@ struct SidecarDone {
     output: String,
     #[allow(dead_code)]
     removed: bool,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    artist: Option<String>,
+    #[serde(default)]
+    album: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -219,6 +266,9 @@ async fn convert_ncm(
                 return ConversionResult {
                     source: source_string,
                     output: None,
+                    title: None,
+                    artist: None,
+                    album: None,
                     success: false,
                     message: "已取消".into(),
                 };
@@ -234,6 +284,9 @@ async fn convert_ncm(
             Err(join_err) => ConversionResult {
                 source: String::new(),
                 output: None,
+                title: None,
+                artist: None,
+                album: None,
                 success: false,
                 message: format!("内部任务失败：{join_err}"),
             },
@@ -314,6 +367,52 @@ fn clear_history(app: AppHandle) -> Result<Vec<HistoryRecord>, String> {
 }
 
 #[tauri::command]
+fn delete_history_record(
+    app: AppHandle,
+    source: String,
+    converted_at: u64,
+) -> Result<Vec<HistoryRecord>, String> {
+    let mut store = read_store(&app)?;
+    store
+        .history
+        .retain(|item| !(item.source == source && item.converted_at == converted_at));
+    write_store(&app, &store)?;
+    Ok(store.history)
+}
+
+#[tauri::command]
+fn scan_default_cache_now() -> Result<DefaultCacheScan, String> {
+    Ok(scan_default_cache())
+}
+
+#[tauri::command]
+fn update_tray_status(
+    app: AppHandle,
+    queue_count: usize,
+    busy: bool,
+    last_status: Option<String>,
+) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let title = if busy {
+            Some("转换中".to_string())
+        } else if queue_count > 0 {
+            Some(format!("{queue_count} 个"))
+        } else {
+            None
+        };
+        let tooltip = match (busy, queue_count, last_status) {
+            (true, count, _) => format!("NCM 转换器 · 正在转换 {count} 个文件"),
+            (false, count, _) if count > 0 => format!("NCM 转换器 · 队列 {count} 个文件"),
+            (false, _, Some(status)) if !status.is_empty() => format!("NCM 转换器 · {status}"),
+            _ => "NCM 转换器".to_string(),
+        };
+        let _ = tray.set_title(title);
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn cancel_ncm() -> Result<(), String> {
     CANCEL_FLAG.store(true, Ordering::SeqCst);
     Ok(())
@@ -346,6 +445,23 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
     }
 
     reveal_path(&path)
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let allowed = [
+        "https://github.com/zhouxuan3550/ncmdump-mac",
+        "https://api.github.com/repos/zhouxuan3550/ncmdump-mac",
+    ];
+    if !allowed.iter().any(|prefix| url.starts_with(prefix)) {
+        return Err("只能打开本应用的 GitHub 页面。".into());
+    }
+
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map_err(|error| format!("无法打开链接：{error}"))?;
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -546,6 +662,106 @@ fn strip_ansi(s: &str) -> String {
     String::from_utf8_lossy(&strip_ansi_escapes::strip(s.as_bytes())).into_owned()
 }
 
+fn safe_path_segment(value: Option<&str>, fallback: &str) -> String {
+    let cleaned = value
+        .unwrap_or(fallback)
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            _ if ch.is_control() => ' ',
+            _ => ch,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned.chars().take(80).collect()
+    }
+}
+
+fn unique_destination(path: PathBuf) -> PathBuf {
+    if !path.exists() {
+        return path;
+    }
+
+    let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "converted".into());
+    let extension = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_string());
+
+    for index in 2..1000 {
+        let file_name = match &extension {
+            Some(ext) if !ext.is_empty() => format!("{stem} {index}.{ext}"),
+            _ => format!("{stem} {index}"),
+        };
+        let candidate = parent.join(file_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    path
+}
+
+fn organize_output(
+    output: Option<String>,
+    policy: OrganizePolicy,
+    artist: Option<&str>,
+    album: Option<&str>,
+) -> Result<Option<String>, String> {
+    if matches!(policy, OrganizePolicy::None) {
+        return Ok(output);
+    }
+
+    let Some(output) = output else {
+        return Ok(None);
+    };
+
+    let source_path = PathBuf::from(&output);
+    if !source_path.is_file() {
+        return Ok(Some(output));
+    }
+
+    let Some(base_dir) = source_path.parent() else {
+        return Ok(Some(output));
+    };
+    let Some(file_name) = source_path.file_name() else {
+        return Ok(Some(output));
+    };
+
+    let artist_dir = safe_path_segment(artist, "未知歌手");
+    let target_dir = match policy {
+        OrganizePolicy::None => base_dir.to_path_buf(),
+        OrganizePolicy::Artist => base_dir.join(artist_dir),
+        OrganizePolicy::Album => base_dir
+            .join(artist_dir)
+            .join(safe_path_segment(album, "未知专辑")),
+    };
+
+    fs::create_dir_all(&target_dir).map_err(|error| format!("无法创建整理目录：{error}"))?;
+    let target_path = unique_destination(target_dir.join(file_name));
+    if target_path == source_path {
+        return Ok(Some(output));
+    }
+
+    fs::rename(&source_path, &target_path)
+        .or_else(|_| {
+            fs::copy(&source_path, &target_path)?;
+            fs::remove_file(&source_path)
+        })
+        .map_err(|error| format!("无法整理输出文件：{error}"))?;
+
+    Ok(Some(target_path.to_string_lossy().to_string()))
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -561,15 +777,28 @@ fn emit_tray_action(app: &AppHandle, action: &str) {
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, TRAY_SHOW, "显示窗口", true, None::<&str>)?;
-    let pick_files = MenuItem::with_id(app, TRAY_PICK_FILES, "选择 NCM 文件...", true, None::<&str>)?;
-    let pick_folder =
-        MenuItem::with_id(app, TRAY_PICK_FOLDER, "选择来源文件夹...", true, None::<&str>)?;
+    let pick_files =
+        MenuItem::with_id(app, TRAY_PICK_FILES, "选择 NCM 文件...", true, None::<&str>)?;
+    let pick_folder = MenuItem::with_id(
+        app,
+        TRAY_PICK_FOLDER,
+        "选择来源文件夹...",
+        true,
+        None::<&str>,
+    )?;
     let convert = MenuItem::with_id(app, TRAY_CONVERT, "开始转换", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT, "退出 NCM 转换器", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&show, &pick_files, &pick_folder, &convert, &separator, &quit],
+        &[
+            &show,
+            &pick_files,
+            &pick_folder,
+            &convert,
+            &separator,
+            &quit,
+        ],
     )?;
 
     let mut builder = TrayIconBuilder::with_id("main")
@@ -622,6 +851,12 @@ async fn convert_one(
     if request.remove_original {
         args.push("-m".into());
     }
+    args.push("--duplicate".into());
+    args.push(match request.duplicate_policy {
+        DuplicatePolicy::Rename => "rename".into(),
+        DuplicatePolicy::Skip => "skip".into(),
+        DuplicatePolicy::Overwrite => "overwrite".into(),
+    });
     args.push("--json".into());
     args.push("-q".into()); // keep stdout reserved for JSON events
 
@@ -631,6 +866,9 @@ async fn convert_one(
             return ConversionResult {
                 source: source_string.to_string(),
                 output: None,
+                title: None,
+                artist: None,
+                album: None,
                 success: false,
                 message: format!("无法启动转换器：{error}"),
             };
@@ -644,6 +882,9 @@ async fn convert_one(
             let success = output.status.success();
 
             let mut collected_output: Option<String> = None;
+            let mut collected_title: Option<String> = None;
+            let mut collected_artist: Option<String> = None;
+            let mut collected_album: Option<String> = None;
             let mut warnings: Vec<String> = Vec::new();
             let mut errors: Vec<String> = Vec::new();
 
@@ -655,6 +896,9 @@ async fn convert_one(
                 match serde_json::from_str::<SidecarEvent>(trimmed) {
                     Ok(SidecarEvent::Done { payload }) => {
                         collected_output = Some(payload.output);
+                        collected_title = payload.title;
+                        collected_artist = payload.artist;
+                        collected_album = payload.album;
                     }
                     Ok(SidecarEvent::Warn { payload }) => warnings.push(payload),
                     Ok(SidecarEvent::Error { payload }) => errors.push(payload),
@@ -692,6 +936,9 @@ async fn convert_one(
                 return ConversionResult {
                     source: source_string.to_string(),
                     output: collected_output,
+                    title: collected_title,
+                    artist: collected_artist,
+                    album: collected_album,
                     success: false,
                     message: if errors.is_empty() {
                         "转换失败".into()
@@ -709,9 +956,32 @@ async fn convert_one(
                 "转换完成".into()
             };
 
+            let output = match organize_output(
+                collected_output,
+                request.organize_policy,
+                collected_artist.as_deref(),
+                collected_album.as_deref(),
+            ) {
+                Ok(output) => output,
+                Err(error) => {
+                    return ConversionResult {
+                        source: source_string.to_string(),
+                        output: None,
+                        title: collected_title,
+                        artist: collected_artist,
+                        album: collected_album,
+                        success: false,
+                        message: error,
+                    };
+                }
+            };
+
             ConversionResult {
                 source: source_string.to_string(),
-                output: collected_output,
+                output,
+                title: collected_title,
+                artist: collected_artist,
+                album: collected_album,
                 success: true,
                 message,
             }
@@ -719,6 +989,9 @@ async fn convert_one(
         Err(error) => ConversionResult {
             source: source_string.to_string(),
             output: None,
+            title: None,
+            artist: None,
+            album: None,
             success: false,
             message: format!("转换器运行失败：{error}"),
         },
@@ -736,9 +1009,13 @@ pub fn run() {
             load_app_data,
             save_settings,
             clear_history,
+            delete_history_record,
             cancel_ncm,
             reveal_in_finder,
-            scan_ncm_paths
+            open_url,
+            scan_ncm_paths,
+            scan_default_cache_now,
+            update_tray_status
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

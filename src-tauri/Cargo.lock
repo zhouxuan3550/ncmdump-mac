@@ -2107,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "ncmdump-mac"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "futures",
  "objc2 0.5.2",

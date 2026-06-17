@@ -30,6 +30,7 @@ struct CliOptions {
 	std::string directory;
 	bool recursive{ false };
 	std::string output;
+	std::string duplicate{ "overwrite" };
 	bool remove{ false };
 	int jobs{ 1 };
 	LogLevel log{ LogLevel::Normal };
@@ -92,12 +93,22 @@ void logError(const CliOptions &opts, const std::string &msg) {
 	}
 }
 
-void logDone(const CliOptions &opts, const std::string &src, const std::string &out, bool removed) {
+void logDone(const CliOptions &opts,
+             const std::string &src,
+             const std::string &out,
+             bool removed,
+             const NeteaseMusicMetadata *metadata) {
 	if (opts.jsonMode) {
 		std::ostringstream p;
 		p << "{\"source\":" << quoteJson(src)
 		  << ",\"output\":" << quoteJson(out)
-		  << ",\"removed\":" << (removed ? "true" : "false") << "}";
+		  << ",\"removed\":" << (removed ? "true" : "false");
+		if (metadata != nullptr) {
+			p << ",\"title\":" << quoteJson(metadata->name())
+			  << ",\"artist\":" << quoteJson(metadata->artist())
+			  << ",\"album\":" << quoteJson(metadata->album());
+		}
+		p << "}";
 		emitJson("done", p.str());
 	} else {
 		std::cout << BOLDGREEN << "[Done] " << RESET << "'" << src << "' -> '" << out << "'";
@@ -163,7 +174,14 @@ ProcessOutcome processFile(const fs::path &filePath, const fs::path &outputFolde
 			cbUd = const_cast<std::string *>(&sourceStr);
 		}
 
-		auto dumpResult = crypt.Dump(outputFolder.u8string(), cb, cbUd);
+		auto duplicateMode = NeteaseCrypt::DuplicateMode::Overwrite;
+		if (opts.duplicate == "skip") {
+			duplicateMode = NeteaseCrypt::DuplicateMode::Skip;
+		} else if (opts.duplicate == "rename") {
+			duplicateMode = NeteaseCrypt::DuplicateMode::Rename;
+		}
+
+		auto dumpResult = crypt.Dump(outputFolder.u8string(), cb, cbUd, duplicateMode);
 		if (dumpResult != NeteaseCrypt::ErrorCode::Ok) {
 			outcome.message = crypt.lastError();
 			logError(opts, outcome.message);
@@ -189,7 +207,7 @@ ProcessOutcome processFile(const fs::path &filePath, const fs::path &outputFolde
 			}
 		}
 
-		logDone(opts, filePath.u8string(), outcome.outputPath, removeOriginal);
+		logDone(opts, filePath.u8string(), outcome.outputPath, removeOriginal, crypt.metadata());
 		return outcome;
 	}
 	catch (const std::exception &e) {
@@ -288,6 +306,7 @@ int main(int argc, char **argv)
 		("v,version", "Print version information")
 		("m,remove", "Remove original file if done")
 		("j,jobs", "Number of parallel workers (default: 1)", cxxopts::value<int>()->default_value("1"))
+		("duplicate", "Duplicate output handling: overwrite, skip, rename", cxxopts::value<std::string>()->default_value("overwrite"))
 		("q,quiet", "Suppress non-error output")
 		("json", "Emit one JSON object per line for programmatic consumption")
 		("dry-run", "Walk inputs and report what would be done, without writing files")
@@ -328,6 +347,7 @@ int main(int argc, char **argv)
 	cli.recursive = result.count("recursive") > 0;
 	cli.remove = result.count("remove") > 0;
 	cli.jobs = std::max(1, result["jobs"].as<int>());
+	cli.duplicate = result["duplicate"].as<std::string>();
 	cli.log = result.count("quiet") > 0 ? LogLevel::Quiet : LogLevel::Normal;
 	cli.jsonMode = result.count("json") > 0;
 	cli.dryRun = result.count("dry-run") > 0;
@@ -349,6 +369,11 @@ int main(int argc, char **argv)
 
 	if (cli.recursive && cli.directory.empty()) {
 		logError(cli, "-r/--recursive requires -d/--directory.");
+		return 1;
+	}
+
+	if (cli.duplicate != "overwrite" && cli.duplicate != "skip" && cli.duplicate != "rename") {
+		logError(cli, "--duplicate must be overwrite, skip, or rename.");
 		return 1;
 	}
 

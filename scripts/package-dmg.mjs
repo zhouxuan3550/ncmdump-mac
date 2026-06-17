@@ -3,18 +3,17 @@
 // is parameterised by version and architecture so multiple builds don't
 // collide.
 
-import { mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url)).replace(/\/scripts$/, "");
 const appPath = join(root, "src-tauri", "target", "release", "bundle", "macos", "NCM 转换器.app");
+const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
-const version =
-	process.env.BUNDLE_VERSION ?? "0.1.0";
-const arch =
-	process.env.BUNDLE_ARCH ?? (process.arch === "arm64" ? "aarch64" : process.arch);
+const version = process.env.BUNDLE_VERSION ?? pkg.version;
+const arch = process.env.BUNDLE_ARCH ?? (process.arch === "arm64" ? "aarch64" : process.arch);
 const volName = process.env.DMG_VOL_NAME ?? "NCM 转换器";
 
 const stagingDir = join(root, "src-tauri", "target", "release", "bundle", "dmg-staging");

@@ -70,12 +70,7 @@ if (alreadyBundled) {
 	copyFileSync(sourceTaglib, bundledTaglib);
 
 	// Re-point the sidecar at the copy inside the bundle.
-	run("install_name_tool", [
-		"-change",
-		referencedTaglib,
-		bundledTaglib,
-		sidecarPath,
-	]);
+	run("install_name_tool", ["-change", referencedTaglib, bundledTaglib, sidecarPath]);
 
 	// Re-base the dylib itself so its own internal references resolve.
 	try {

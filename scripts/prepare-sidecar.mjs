@@ -36,7 +36,8 @@ function ensure(cond, message) {
 function buildArch(arch) {
 	const archDir = join(buildDir, arch);
 	mkdirSync(archDir, { recursive: true });
-	const archFlag = arch === "arm64" ? "-DCMAKE_OSX_ARCHITECTURES=arm64" : "-DCMAKE_OSX_ARCHITECTURES=x86_64";
+	const archFlag =
+		arch === "arm64" ? "-DCMAKE_OSX_ARCHITECTURES=arm64" : "-DCMAKE_OSX_ARCHITECTURES=x86_64";
 	run("cmake", ["-DCMAKE_BUILD_TYPE=Release", archFlag, "-S", root, "-B", archDir]);
 	run("cmake", ["--build", archDir, "-j"]);
 	const binary = join(archDir, "ncmdump");
@@ -131,7 +132,10 @@ function main() {
 		const binary = join(buildDir, "ncmdump");
 		run("cmake", ["-DCMAKE_BUILD_TYPE=Release", "-S", root, "-B", buildDir]);
 		run("cmake", ["--build", buildDir, "-j"]);
-		installSidecar(binary, process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x86_64" : hostTriple);
+		installSidecar(
+			binary,
+			process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x86_64" : hostTriple
+		);
 	}
 }
 

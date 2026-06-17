@@ -39,6 +39,7 @@ class NeteaseCrypt {
 
 public:
 	enum class NcmFormat { MP3, FLAC };
+	enum class DuplicateMode { Overwrite, Skip, Rename };
 	enum class ErrorCode {
 		Ok = 0,
 		ErrOpenFile = 1,
@@ -50,6 +51,7 @@ public:
 		ErrOutputDir = 7,
 		ErrOutputOpen = 8,
 		ErrTagLib = 9,
+		ErrOutputExists = 10,
 		ErrUnknown = 99,
 	};
 
@@ -111,6 +113,7 @@ public:
 	// Passing `nullptr` disables progress reporting (the default).
 	ErrorCode Dump(std::string const& outputDir,
 	               NcmProgressCallback cb = nullptr,
-	               void *userdata = nullptr);
+	               void *userdata = nullptr,
+	               DuplicateMode duplicateMode = DuplicateMode::Overwrite);
 	ErrorCode FixMetadata();
 };

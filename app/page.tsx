@@ -1,6 +1,7 @@
 "use client";
 
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -10,6 +11,7 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  Copy,
   Download,
   FileAudio2,
   FolderOpen,
@@ -21,6 +23,7 @@ import {
   Settings2,
   Sparkles,
   Trash2,
+  RotateCcw,
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -29,6 +32,8 @@ import { strings } from "./strings";
 type Mode = "files" | "folder";
 type ConversionStatus = "waiting" | "converting" | "done" | "failed";
 type SectionId = "convert" | "queue" | "history" | "settings";
+type DuplicatePolicy = "rename" | "skip" | "overwrite";
+type OrganizePolicy = "none" | "artist" | "album";
 
 type ProgressInfo = { processed: number; total: number };
 
@@ -44,6 +49,9 @@ type ConversionRecord = {
 type ConversionResult = {
   source: string;
   output: string | null;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
   success: boolean;
   message: string;
 };
@@ -54,6 +62,10 @@ type AppSettings = {
   removeOriginal: boolean;
   jobs: number;
   autoScanDefault: boolean;
+  watchDefaultCache: boolean;
+  autoRevealOutput: boolean;
+  duplicatePolicy: DuplicatePolicy;
+  organizePolicy: OrganizePolicy;
 };
 
 type HistoryRecord = {
@@ -73,6 +85,12 @@ type AppData = {
   settings: AppSettings;
   history: HistoryRecord[];
   defaultCache: DefaultCacheScan;
+};
+
+type GithubRelease = {
+  tag_name?: string;
+  html_url?: string;
+  name?: string;
 };
 
 const basename = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -108,6 +126,27 @@ function formatHistoryTime(seconds: number): string {
   }).format(new Date(seconds * 1000));
 }
 
+function normalizeVersion(value: string): number[] {
+  return value
+    .replace(/^v/i, "")
+    .split(/[.-]/)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
+}
+
+function isNewerVersion(latest: string, current: string): boolean {
+  const a = normalizeVersion(latest);
+  const b = normalizeVersion(current);
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    const next = a[index] ?? 0;
+    const currentPart = b[index] ?? 0;
+    if (next > currentPart) return true;
+    if (next < currentPart) return false;
+  }
+  return false;
+}
+
 // `useEffect` captures the version of a callback that was current at the
 // time the effect ran. For keyboard shortcuts we want the latest closure on
 // every keystroke, so we mirror each function into a ref and read through
@@ -128,6 +167,10 @@ export default function Home() {
   const [removeOriginal, setRemoveOriginal] = useState(false);
   const [jobs, setJobs] = useState(2);
   const [autoScanDefault, setAutoScanDefault] = useState(true);
+  const [watchDefaultCache, setWatchDefaultCache] = useState(true);
+  const [autoRevealOutput, setAutoRevealOutput] = useState(false);
+  const [duplicatePolicy, setDuplicatePolicy] = useState<DuplicatePolicy>("rename");
+  const [organizePolicy, setOrganizePolicy] = useState<OrganizePolicy>("none");
   const [history, setHistory] = useState<HistoryRecord[]>([]);
   const [defaultCache, setDefaultCache] = useState<DefaultCacheScan | null>(null);
   const [settingsReady, setSettingsReady] = useState(false);
@@ -140,12 +183,15 @@ export default function Home() {
   } | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const watchedCacheFilesRef = useRef<Set<string>>(new Set());
+  const cacheWatchReadyRef = useRef(false);
 
   const selectedCount = useMemo(
     () => records.filter((r) => r.status !== "done" && r.status !== "failed").length,
-    [records],
+    [records]
   );
 
   const summary = useMemo(() => {
@@ -164,7 +210,7 @@ export default function Home() {
     (tone: "error" | "info", text: string, action?: { label: string; onClick: () => void }) => {
       setToast({ tone, text, actionLabel: action?.label, onAction: action?.onClick });
     },
-    [],
+    []
   );
 
   useEffect(() => {
@@ -183,8 +229,13 @@ export default function Home() {
         setRemoveOriginal(data.settings.removeOriginal);
         setJobs(Math.min(8, Math.max(1, data.settings.jobs || 2)));
         setAutoScanDefault(data.settings.autoScanDefault);
+        setWatchDefaultCache(data.settings.watchDefaultCache);
+        setAutoRevealOutput(data.settings.autoRevealOutput);
+        setDuplicatePolicy(data.settings.duplicatePolicy || "rename");
+        setOrganizePolicy(data.settings.organizePolicy || "none");
         setHistory(data.history);
         setDefaultCache(data.defaultCache);
+        watchedCacheFilesRef.current = new Set(data.defaultCache.files);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -210,12 +261,28 @@ export default function Home() {
           removeOriginal,
           jobs,
           autoScanDefault,
+          watchDefaultCache,
+          autoRevealOutput,
+          duplicatePolicy,
+          organizePolicy,
         },
       }).catch((err) => showToast("error", err instanceof Error ? err.message : String(err)));
     }, 350);
 
     return () => window.clearTimeout(id);
-  }, [autoScanDefault, jobs, outputDir, recursive, removeOriginal, settingsReady, showToast]);
+  }, [
+    autoRevealOutput,
+    autoScanDefault,
+    duplicatePolicy,
+    jobs,
+    organizePolicy,
+    outputDir,
+    recursive,
+    removeOriginal,
+    settingsReady,
+    showToast,
+    watchDefaultCache,
+  ]);
 
   const mergeScannedFiles = useCallback((nextSources: string[]) => {
     setRecords((previous) => {
@@ -270,8 +337,112 @@ export default function Home() {
         showToast("error", err instanceof Error ? err.message : String(err));
       }
     },
-    [mergeScannedFiles, recursive, showToast],
+    [mergeScannedFiles, recursive, showToast]
   );
+
+  const addSourcesToQueue = useCallback(
+    (sources: string[], message?: string) => {
+      if (sources.length === 0) return;
+      setMode("files");
+      setRecords((previous) => {
+        const known = new Set(previous.map((r) => r.source));
+        const additions = sources
+          .filter((source) => !known.has(source))
+          .map((source) => ({
+            source,
+            output: null,
+            status: "waiting" as ConversionStatus,
+            message: "",
+            progress: null,
+          }));
+        return [...previous, ...additions];
+      });
+      if (message) showToast("info", message);
+    },
+    [showToast]
+  );
+
+  useEffect(() => {
+    if (!settingsReady || !watchDefaultCache) return;
+    let cancelled = false;
+
+    const check = async () => {
+      try {
+        const scan = await invoke<DefaultCacheScan>("scan_default_cache_now");
+        if (cancelled) return;
+        if (scan.path) setDefaultCache(scan);
+        const known = watchedCacheFilesRef.current;
+        const current = new Set(scan.files);
+        const additions = scan.files.filter((file) => !known.has(file));
+        watchedCacheFilesRef.current = current;
+        if (!cacheWatchReadyRef.current) {
+          cacheWatchReadyRef.current = true;
+          return;
+        }
+        if (additions.length === 0) return;
+        showToast("info", strings.toast.newCacheFound(additions.length), {
+          label: strings.defaultCache.add,
+          onClick: () =>
+            addSourcesToQueue(additions, strings.toast.defaultCacheAdded(additions.length)),
+        });
+      } catch {
+        // Cache polling should stay quiet; manual scan still reports errors.
+      }
+    };
+
+    const id = window.setInterval(check, 12000);
+    void check();
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [addSourcesToQueue, settingsReady, showToast, watchDefaultCache]);
+
+  const checkForUpdates = useCallback(
+    async (manual = true) => {
+      if (checkingUpdate) return;
+      setCheckingUpdate(true);
+      try {
+        const [currentVersion, response] = await Promise.all([
+          getVersion(),
+          fetch("https://api.github.com/repos/zhouxuan3550/ncmdump-mac/releases/latest", {
+            headers: { Accept: "application/vnd.github+json" },
+          }),
+        ]);
+        if (!response.ok) {
+          throw new Error(`GitHub 返回 ${response.status}`);
+        }
+        const release = (await response.json()) as GithubRelease;
+        const latest = release.tag_name || release.name || "";
+        const url = release.html_url || "https://github.com/zhouxuan3550/ncmdump-mac/releases";
+        if (latest && isNewerVersion(latest, currentVersion)) {
+          showToast("info", strings.toast.updateFound(latest), {
+            label: strings.buttons.openRelease,
+            onClick: () => void invoke("open_url", { url }),
+          });
+        } else if (manual) {
+          showToast("info", strings.toast.upToDate(currentVersion));
+        }
+      } catch (err) {
+        if (manual) {
+          showToast("error", err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        setCheckingUpdate(false);
+      }
+    },
+    [checkingUpdate, showToast]
+  );
+
+  useEffect(() => {
+    if (!settingsReady) return;
+    const key = "ncm-converter-last-update-check";
+    const today = new Date().toISOString().slice(0, 10);
+    if (window.localStorage.getItem(key) === today) return;
+    window.localStorage.setItem(key, today);
+    const id = window.setTimeout(() => void checkForUpdates(false), 1800);
+    return () => window.clearTimeout(id);
+  }, [checkForUpdates, settingsReady]);
 
   useEffect(() => {
     const unlistens: Array<() => void> = [];
@@ -325,7 +496,7 @@ export default function Home() {
               message: p.message,
               progress: null,
             };
-          }),
+          })
         );
       })
       .then((unlisten) => unlistens.push(unlisten));
@@ -436,6 +607,18 @@ export default function Home() {
     };
   }, [canConvertRef, chooseFilesRef, chooseFolderRef, convertRef]);
 
+  useEffect(() => {
+    const lastStatus =
+      summary.ok > 0 || summary.failed > 0
+        ? `完成 ${summary.ok} 个，失败 ${summary.failed} 个`
+        : undefined;
+    void invoke("update_tray_status", {
+      queueCount: selectedCount,
+      busy,
+      lastStatus,
+    }).catch(() => {});
+  }, [busy, selectedCount, summary.failed, summary.ok]);
+
   async function chooseFiles() {
     const selected = await open({
       multiple: true,
@@ -469,9 +652,10 @@ export default function Home() {
 
   function addDefaultCacheToQueue() {
     if (!defaultCache?.files.length) return;
-    setMode("files");
-    mergeScannedFiles(defaultCache.files);
-    showToast("info", strings.toast.defaultCacheAdded(defaultCache.files.length));
+    addSourcesToQueue(
+      defaultCache.files,
+      strings.toast.defaultCacheAdded(defaultCache.files.length)
+    );
   }
 
   async function revealPath(path: string | null) {
@@ -492,13 +676,46 @@ export default function Home() {
     }
   }
 
+  async function deleteHistoryItem(item: HistoryRecord) {
+    try {
+      const next = await invoke<HistoryRecord[]>("delete_history_record", {
+        source: item.source,
+        convertedAt: item.convertedAt,
+      });
+      setHistory(next);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function copyText(text: string | null) {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("info", strings.toast.copied);
+    } catch (err) {
+      showToast("error", err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function reconvertFromHistory(item: HistoryRecord) {
+    addSourcesToQueue([item.source], strings.toast.reconvertAdded);
+    scrollToSection("queue");
+  }
+
   async function convert() {
     setBusy(true);
     const controller = new AbortController();
     abortRef.current = controller;
     try {
       setRecords((previous) =>
-        previous.map((r) => ({ ...r, output: null, status: "waiting", message: "", progress: null })),
+        previous.map((r) => ({
+          ...r,
+          output: null,
+          status: "waiting",
+          message: "",
+          progress: null,
+        }))
       );
       const results = await invoke<ConversionResult[]>("convert_ncm", {
         request: {
@@ -508,26 +725,38 @@ export default function Home() {
           outputDir: outputDir || null,
           recursive,
           removeOriginal,
+          duplicatePolicy,
+          organizePolicy,
           jobs,
         },
       });
       const convertedAt = Math.floor(Date.now() / 1000);
-      setHistory((previous) => [
-        ...results.map((result) => ({
-          source: result.source,
-          output: result.output,
-          success: result.success,
-          message: result.message,
-          convertedAt,
-        })),
-        ...previous,
-      ].slice(0, 100));
+      setHistory((previous) =>
+        [
+          ...results.map((result) => ({
+            source: result.source,
+            output: result.output,
+            success: result.success,
+            message: result.message,
+            convertedAt,
+          })),
+          ...previous,
+        ].slice(0, 100)
+      );
       const ok = results.filter((result) => result.success).length;
       const failed = results.length - ok;
-      const revealTarget = results.find((result) => result.success && result.output)?.output ?? null;
-      showToast("info", strings.toast.convertDone(ok, failed), revealTarget
-        ? { label: strings.buttons.reveal, onClick: () => void revealPath(revealTarget) }
-        : undefined);
+      const revealTarget =
+        results.find((result) => result.success && result.output)?.output ?? null;
+      showToast(
+        "info",
+        strings.toast.convertDone(ok, failed),
+        revealTarget
+          ? { label: strings.buttons.reveal, onClick: () => void revealPath(revealTarget) }
+          : undefined
+      );
+      if (autoRevealOutput && revealTarget) {
+        await revealPath(revealTarget);
+      }
     } catch (err) {
       showToast("error", err instanceof Error ? err.message : String(err));
     } finally {
@@ -653,13 +882,16 @@ export default function Home() {
             />
           </nav>
 
-          <div className="mt-2 rounded-2xl bg-well/25 p-3 soft-ring">
-            <SidebarStat label={strings.stats.ncmFiles} value={mode === "files" ? records.length : 0} />
+          <div className="mt-2 rounded-2xl bg-well/[0.45] p-3 soft-ring">
+            <SidebarStat
+              label={strings.stats.ncmFiles}
+              value={mode === "files" ? records.length : 0}
+            />
             <SidebarStat label={strings.stats.folderMode} value={folder ? 1 : 0} />
             <SidebarStat label={strings.stats.history} value={history.length} />
           </div>
 
-          <div className="mt-auto rounded-2xl bg-card/18 p-4 soft-ring">
+          <div className="mt-auto rounded-2xl bg-card/[0.42] p-4 soft-ring">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">
               {strings.stats.sources}
             </div>
@@ -696,10 +928,21 @@ export default function Home() {
           />
 
           <Card id="section-convert">
-            <SectionHeader title={strings.sections.sourceTitle} subtitle={strings.sections.sourceDesc}>
+            <SectionHeader
+              title={strings.sections.sourceTitle}
+              subtitle={strings.sections.sourceDesc}
+            >
               <div className="grid grid-cols-2 rounded-lg bg-well/35 p-0.5 soft-ring">
-                <ModeButton active={mode === "files"} label="文件" onClick={() => setMode("files")} />
-                <ModeButton active={mode === "folder"} label="文件夹" onClick={() => setMode("folder")} />
+                <ModeButton
+                  active={mode === "files"}
+                  label="文件"
+                  onClick={() => setMode("files")}
+                />
+                <ModeButton
+                  active={mode === "folder"}
+                  label="文件夹"
+                  onClick={() => setMode("folder")}
+                />
               </div>
             </SectionHeader>
 
@@ -724,7 +967,7 @@ export default function Home() {
 
             {autoScanDefault && defaultCache?.files.length ? (
               <button
-                className="accent-frame mt-3 flex w-full items-center justify-between gap-3 rounded-xl bg-card/12 px-3.5 py-3 text-left soft-ring transition hover:bg-card/18"
+                className="accent-frame mt-3 flex w-full items-center justify-between gap-3 rounded-xl bg-card/[0.32] px-3.5 py-3 text-left soft-ring transition hover:bg-card/[0.45]"
                 onClick={addDefaultCacheToQueue}
                 type="button"
               >
@@ -745,7 +988,10 @@ export default function Home() {
           </Card>
 
           <Card id="section-settings">
-            <SectionHeader title={strings.sections.outputTitle} subtitle={strings.sections.outputDesc} />
+            <SectionHeader
+              title={strings.sections.outputTitle}
+              subtitle={strings.sections.outputDesc}
+            />
 
             <button
               className="accent-frame output-focus priority-action group mt-3 flex min-h-[76px] w-full items-center justify-between gap-3 rounded-xl px-4 text-left transition"
@@ -775,6 +1021,42 @@ export default function Home() {
 
             <div className="mt-3">
               <JobsControl value={jobs} onChange={setJobs} />
+            </div>
+
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <DuplicateControl value={duplicatePolicy} onChange={setDuplicatePolicy} />
+              <OrganizeControl value={organizePolicy} onChange={setOrganizePolicy} />
+            </div>
+
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <ToggleCard
+                checked={autoRevealOutput}
+                description={strings.buttons.autoRevealOutputDesc}
+                label={strings.buttons.autoRevealOutput}
+                onChange={setAutoRevealOutput}
+              />
+              <button
+                className="flex min-h-[76px] items-center justify-between gap-3 rounded-xl bg-card/[0.24] p-3 text-left soft-ring transition hover:bg-card/[0.32]"
+                disabled={checkingUpdate}
+                onClick={() => void checkForUpdates(true)}
+                type="button"
+              >
+                <span className="min-w-0">
+                  <span className="block text-[12px] font-bold text-primary">
+                    {strings.buttons.checkUpdate}
+                  </span>
+                  <span className="mt-1 block text-[10px] leading-relaxed text-muted">
+                    {strings.buttons.checkUpdateDesc}
+                  </span>
+                </span>
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-card/45 text-secondary soft-ring">
+                  {checkingUpdate ? (
+                    <Loader2 className="animate-spin" size={14} aria-hidden="true" />
+                  ) : (
+                    <ArrowRight size={14} aria-hidden="true" />
+                  )}
+                </span>
+              </button>
             </div>
 
             <button
@@ -811,6 +1093,12 @@ export default function Home() {
                   label={strings.buttons.autoScanDefault}
                   onChange={setAutoScanDefault}
                 />
+                <ToggleCard
+                  checked={watchDefaultCache}
+                  description={strings.buttons.watchDefaultCacheDesc}
+                  label={strings.buttons.watchDefaultCache}
+                  onChange={setWatchDefaultCache}
+                />
               </div>
             ) : null}
           </Card>
@@ -818,7 +1106,9 @@ export default function Home() {
           <Card id="section-queue">
             <SectionHeader
               title={strings.sections.queueTitle}
-              subtitle={selectedCount > 0 ? strings.sections.queueReady : strings.sections.queueEmpty}
+              subtitle={
+                selectedCount > 0 ? strings.sections.queueReady : strings.sections.queueEmpty
+              }
             >
               {removeOriginal ? (
                 <div className="inline-flex items-center gap-1.5 rounded-full bg-bad/12 px-2.5 py-1 text-[11px] font-semibold text-bad ring-1 ring-bad/25">
@@ -845,7 +1135,12 @@ export default function Home() {
               ) : null}
             </div>
 
-            <MobileActions busy={busy} canConvert={canConvert} onConvert={convert} onClear={clearAll} />
+            <MobileActions
+              busy={busy}
+              canConvert={canConvert}
+              onConvert={convert}
+              onClear={clearAll}
+            />
           </Card>
 
           <Card id="section-history">
@@ -871,7 +1166,14 @@ export default function Home() {
 
             <div className="mt-4 space-y-1.5">
               {history.slice(0, RECENT_HISTORY_LIMIT).map((item) => (
-                <HistoryRow item={item} key={`${item.convertedAt}-${item.source}`} onReveal={revealPath} />
+                <HistoryRow
+                  item={item}
+                  key={`${item.convertedAt}-${item.source}`}
+                  onCopy={copyText}
+                  onDelete={deleteHistoryItem}
+                  onReveal={revealPath}
+                  onRetry={reconvertFromHistory}
+                />
               ))}
               {history.length > RECENT_HISTORY_LIMIT ? (
                 <div className="px-3 py-1.5 text-xs font-medium text-faint">
@@ -892,8 +1194,8 @@ export default function Home() {
               className={clsx(
                 "fixed bottom-5 right-5 z-50 flex max-w-[340px] items-center gap-3 rounded-2xl border p-3 text-[12px] font-semibold leading-relaxed shadow-2xl backdrop-blur-xl transition",
                 toast.tone === "error"
-                  ? "border-bad/25 bg-bad/10 text-bad"
-                  : "border-subtle bg-card/72 text-primary",
+                  ? "border-bad/25 bg-bad/15 text-bad"
+                  : "border-subtle bg-card/[0.88] text-primary"
               )}
               role="status"
             >
@@ -962,7 +1264,7 @@ function Header({
             "group inline-flex h-9 items-center gap-2 rounded-full px-4 text-xs font-bold transition",
             canConvert
               ? "bg-gradient-to-br from-accent to-accent-2 text-on-accent shadow-[0_8px_22px_rgb(var(--accent-glow)/0.32)] hover:shadow-[0_10px_28px_rgb(var(--accent-glow)/0.42)]"
-              : "bg-well text-faint ring-1 ring-subtle",
+              : "bg-well text-faint ring-1 ring-subtle"
           )}
           disabled={!canConvert}
           onClick={onConvert}
@@ -1044,9 +1346,7 @@ function SidebarItem({
       aria-current={active ? "page" : undefined}
       className={clsx(
         "group flex h-10 w-full items-center justify-between rounded-xl px-3.5 text-[13px] font-semibold transition",
-        active
-          ? "nav-priority text-primary"
-          : "text-secondary hover:bg-well/35 hover:text-primary",
+        active ? "nav-priority text-primary" : "text-secondary hover:bg-well/35 hover:text-primary"
       )}
       onClick={onClick}
       type="button"
@@ -1055,7 +1355,7 @@ function SidebarItem({
         <span
           className={clsx(
             "transition",
-            active ? "text-accent" : "text-muted group-hover:text-primary",
+            active ? "text-accent" : "text-muted group-hover:text-primary"
           )}
         >
           {icon}
@@ -1088,7 +1388,7 @@ function MiniStat({
           "mt-0.5 text-sm font-bold tabular-nums",
           tone === "good" && "text-good",
           tone === "bad" && "text-bad",
-          tone === "muted" && "text-faint",
+          tone === "muted" && "text-faint"
         )}
       >
         {value}
@@ -1097,15 +1397,21 @@ function MiniStat({
   );
 }
 
-function ModeButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+function ModeButton({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
   return (
     <button
       aria-selected={active}
       className={clsx(
         "h-7 rounded-md px-3 text-[11px] font-bold tracking-wide transition",
-        active
-          ? "bg-card text-primary shadow-sm"
-          : "text-muted hover:text-primary",
+        active ? "bg-card text-primary shadow-sm" : "text-muted hover:text-primary"
       )}
       onClick={onClick}
       role="tab"
@@ -1136,9 +1442,7 @@ function SourceButton({
       aria-pressed={active}
       className={clsx(
         "accent-frame priority-action group relative flex min-h-[100px] items-stretch overflow-hidden rounded-xl p-3.5 pl-5 text-left transition",
-        active
-          ? "active-glow"
-          : "",
+        active ? "active-glow" : ""
       )}
       onClick={onClick}
       type="button"
@@ -1146,9 +1450,7 @@ function SourceButton({
       <span
         className={clsx(
           "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition",
-          active
-            ? "bg-card/60 text-accent"
-            : "bg-card/42 text-accent",
+          active ? "bg-card/60 text-accent" : "bg-card/42 text-accent"
         )}
       >
         {icon}
@@ -1168,7 +1470,7 @@ function SourceButton({
           "ml-2 self-center transition",
           active
             ? "text-accent"
-            : "text-faint group-hover:translate-x-0.5 group-hover:text-secondary",
+            : "text-faint group-hover:translate-x-0.5 group-hover:text-secondary"
         )}
         aria-hidden="true"
       />
@@ -1193,16 +1495,14 @@ function ToggleCard({
       aria-checked={checked}
       className={clsx(
         "quiet-option flex min-h-[76px] cursor-pointer items-start gap-3 rounded-xl p-3 ring-1 ring-subtle transition",
-        checked ? "bg-card/12 active-glow" : "bg-card/10 hover:bg-card/16",
+        checked ? "bg-card/[0.35] active-glow" : "bg-card/[0.24] hover:bg-card/[0.34]"
       )}
       htmlFor={labelId}
       role="switch"
     >
       <span className="min-w-0 flex-1">
         <span className="block text-[12px] font-bold text-primary">{label}</span>
-        <span className="mt-1 block text-[10px] leading-relaxed text-muted">
-          {description}
-        </span>
+        <span className="mt-1 block text-[10px] leading-relaxed text-muted">{description}</span>
       </span>
       <input
         checked={checked}
@@ -1214,13 +1514,13 @@ function ToggleCard({
       <span
         className={clsx(
           "relative mt-0.5 flex h-5 w-9 shrink-0 items-center rounded-full transition",
-          checked ? "bg-gradient-to-r from-accent to-accent-2" : "bg-default/35",
+          checked ? "bg-gradient-to-r from-accent to-accent-2" : "bg-default/35"
         )}
       >
         <span
           className={clsx(
             "absolute h-4 w-4 rounded-full bg-card/90 shadow-md transition-transform",
-            checked ? "translate-x-[18px]" : "translate-x-0.5",
+            checked ? "translate-x-[18px]" : "translate-x-0.5"
           )}
         />
       </span>
@@ -1230,7 +1530,7 @@ function ToggleCard({
 
 function JobsControl({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   return (
-    <div className="flex min-h-[76px] items-start gap-3 rounded-xl bg-card/10 p-3 soft-ring">
+    <div className="flex min-h-[76px] items-start gap-3 rounded-xl bg-card/[0.24] p-3 soft-ring">
       <span className="min-w-0 flex-1">
         <span className="block text-[12px] font-bold text-primary">{strings.buttons.jobs}</span>
         <span className="mt-1 block text-[10px] leading-relaxed text-muted">
@@ -1245,7 +1545,7 @@ function JobsControl({ value, onChange }: { value: number; onChange: (value: num
               "h-7 w-8 rounded-md text-[11px] font-bold tabular-nums transition",
               value === n
                 ? "bg-gradient-to-br from-accent to-accent-2 text-on-accent"
-                : "text-muted hover:bg-well hover:text-primary",
+                : "text-muted hover:bg-well hover:text-primary"
             )}
             key={n}
             onClick={() => onChange(n)}
@@ -1259,12 +1559,106 @@ function JobsControl({ value, onChange }: { value: number; onChange: (value: num
   );
 }
 
+function DuplicateControl({
+  value,
+  onChange,
+}: {
+  value: DuplicatePolicy;
+  onChange: (value: DuplicatePolicy) => void;
+}) {
+  const options: Array<{ value: DuplicatePolicy; label: string }> = [
+    { value: "rename", label: strings.duplicate.rename },
+    { value: "skip", label: strings.duplicate.skip },
+    { value: "overwrite", label: strings.duplicate.overwrite },
+  ];
+
+  return (
+    <div className="flex min-h-[76px] items-start gap-3 rounded-xl bg-card/[0.24] p-3 soft-ring">
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12px] font-bold text-primary">
+          {strings.buttons.duplicate}
+        </span>
+        <span className="mt-1 block text-[10px] leading-relaxed text-muted">
+          {strings.buttons.duplicateDesc}
+        </span>
+      </span>
+      <div className="grid grid-cols-3 gap-1 rounded-lg bg-card/45 p-1 soft-ring">
+        {options.map((option) => (
+          <button
+            aria-pressed={value === option.value}
+            className={clsx(
+              "h-7 rounded-md px-2 text-[11px] font-bold transition",
+              value === option.value
+                ? "bg-gradient-to-br from-accent to-accent-2 text-on-accent"
+                : "text-muted hover:bg-well hover:text-primary"
+            )}
+            key={option.value}
+            onClick={() => onChange(option.value)}
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OrganizeControl({
+  value,
+  onChange,
+}: {
+  value: OrganizePolicy;
+  onChange: (value: OrganizePolicy) => void;
+}) {
+  const options: Array<{ value: OrganizePolicy; label: string }> = [
+    { value: "none", label: strings.organize.none },
+    { value: "artist", label: strings.organize.artist },
+    { value: "album", label: strings.organize.album },
+  ];
+
+  return (
+    <div className="flex min-h-[76px] items-start gap-3 rounded-xl bg-card/[0.24] p-3 soft-ring">
+      <span className="min-w-0 flex-1">
+        <span className="block text-[12px] font-bold text-primary">{strings.buttons.organize}</span>
+        <span className="mt-1 block text-[10px] leading-relaxed text-muted">
+          {strings.buttons.organizeDesc}
+        </span>
+      </span>
+      <div className="grid grid-cols-3 gap-1 rounded-lg bg-card/45 p-1 soft-ring">
+        {options.map((option) => (
+          <button
+            aria-pressed={value === option.value}
+            className={clsx(
+              "h-7 rounded-md px-2 text-[11px] font-bold transition",
+              value === option.value
+                ? "bg-gradient-to-br from-accent to-accent-2 text-on-accent"
+                : "text-muted hover:bg-well hover:text-primary"
+            )}
+            key={option.value}
+            onClick={() => onChange(option.value)}
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function HistoryRow({
   item,
+  onCopy,
+  onDelete,
   onReveal,
+  onRetry,
 }: {
   item: HistoryRecord;
+  onCopy: (text: string | null) => void;
+  onDelete: (item: HistoryRecord) => void;
   onReveal: (path: string | null) => void;
+  onRetry: (item: HistoryRecord) => void;
 }) {
   const revealTarget = item.output ?? item.source;
 
@@ -1274,7 +1668,7 @@ function HistoryRow({
         <div
           className={clsx(
             "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-            item.success ? "bg-good/15 text-good" : "bg-bad/15 text-bad",
+            item.success ? "bg-good/15 text-good" : "bg-bad/15 text-bad"
           )}
         >
           {item.success ? (
@@ -1285,7 +1679,9 @@ function HistoryRow({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <div className="truncate text-[13px] font-semibold text-primary">{basename(item.source)}</div>
+            <div className="truncate text-[13px] font-semibold text-primary">
+              {basename(item.source)}
+            </div>
             <span className="shrink-0 rounded-full bg-card/50 px-2 py-0.5 text-[10px] font-bold text-secondary soft-ring">
               {formatHistoryTime(item.convertedAt)}
             </span>
@@ -1294,16 +1690,53 @@ function HistoryRow({
             {item.output ? item.output : item.message}
           </div>
         </div>
-        <button
-          className="hidden h-8 shrink-0 items-center gap-1.5 rounded-lg bg-card/50 px-2.5 text-[11px] font-semibold text-secondary soft-ring transition hover:bg-elevated/60 hover:text-primary group-hover:inline-flex"
-          onClick={() => onReveal(revealTarget)}
-          type="button"
-        >
-          <FolderOpen size={12} aria-hidden="true" />
-          {strings.buttons.reveal}
-        </button>
+        <div className="hidden shrink-0 items-center gap-1 group-hover:flex">
+          <IconAction label={strings.buttons.retry} onClick={() => onRetry(item)}>
+            <RotateCcw size={12} aria-hidden="true" />
+          </IconAction>
+          <IconAction label={strings.buttons.copyPath} onClick={() => onCopy(revealTarget)}>
+            <Copy size={12} aria-hidden="true" />
+          </IconAction>
+          <IconAction label={strings.buttons.reveal} onClick={() => onReveal(revealTarget)}>
+            <FolderOpen size={12} aria-hidden="true" />
+          </IconAction>
+          <IconAction
+            label={strings.buttons.deleteRecord}
+            onClick={() => onDelete(item)}
+            tone="danger"
+          >
+            <Trash2 size={12} aria-hidden="true" />
+          </IconAction>
+        </div>
       </div>
     </div>
+  );
+}
+
+function IconAction({
+  children,
+  label,
+  onClick,
+  tone,
+}: {
+  children: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  tone?: "danger";
+}) {
+  return (
+    <button
+      aria-label={label}
+      className={clsx(
+        "inline-flex h-8 items-center justify-center rounded-lg bg-card/50 px-2.5 text-[11px] font-semibold text-secondary soft-ring transition hover:bg-elevated/60 hover:text-primary",
+        tone === "danger" && "hover:text-bad"
+      )}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      {children}
+    </button>
   );
 }
 
@@ -1316,9 +1749,13 @@ function PathRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const showProgress = item.status === "converting" && item.progress != null;
-  const pct = showProgress && item.progress
-    ? Math.min(100, Math.max(0, Math.round((item.progress.processed / item.progress.total) * 100)))
-    : 0;
+  const pct =
+    showProgress && item.progress
+      ? Math.min(
+          100,
+          Math.max(0, Math.round((item.progress.processed / item.progress.total) * 100))
+        )
+      : 0;
   const canReveal = item.status === "done" && Boolean(item.output);
   const canExpand = item.status === "failed" && Boolean(item.message);
 
@@ -1328,7 +1765,7 @@ function PathRow({
         "group rounded-xl px-3 py-2.5 soft-ring transition hover:bg-well/40",
         item.status === "converting" ? "bg-accent/[0.07]" : "bg-well/25",
         item.status === "failed" && "ring-1 ring-bad/20",
-        item.status === "done" && "ring-1 ring-good/15",
+        item.status === "done" && "ring-1 ring-good/15"
       )}
     >
       <div className="flex items-center gap-3">
@@ -1338,7 +1775,7 @@ function PathRow({
             item.status === "done" && "bg-good/15 text-good",
             item.status === "failed" && "bg-bad/15 text-bad",
             item.status === "converting" && "bg-accent/15 text-accent",
-            item.status === "waiting" && "bg-card text-muted",
+            item.status === "waiting" && "bg-card text-muted"
           )}
         >
           {item.status === "converting" ? (
@@ -1353,12 +1790,12 @@ function PathRow({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <div className="truncate text-[13px] font-semibold text-primary">{basename(item.source)}</div>
+            <div className="truncate text-[13px] font-semibold text-primary">
+              {basename(item.source)}
+            </div>
             <StatusBadge status={item.status} />
             {showProgress ? (
-              <span className="ml-auto text-[10px] font-bold tabular-nums text-accent">
-                {pct}%
-              </span>
+              <span className="ml-auto text-[10px] font-bold tabular-nums text-accent">{pct}%</span>
             ) : null}
           </div>
           {!showProgress ? (
@@ -1388,9 +1825,7 @@ function PathRow({
           </button>
         ) : null}
       </div>
-      {showProgress && item.progress ? (
-        <ProgressBar progress={item.progress} />
-      ) : null}
+      {showProgress && item.progress ? <ProgressBar progress={item.progress} /> : null}
       {expanded ? (
         <div className="mt-2 ml-11 rounded-lg bg-bad/[0.08] px-3 py-2 text-[11px] leading-relaxed text-bad ring-1 ring-bad/15">
           {item.message}
@@ -1438,10 +1873,7 @@ function ProgressBar({ progress }: { progress: ProgressInfo }) {
     }
   }, [progress.processed, progress.total]);
 
-  const pct = Math.min(
-    100,
-    Math.max(0, Math.round((progress.processed / progress.total) * 100)),
-  );
+  const pct = Math.min(100, Math.max(0, Math.round((progress.processed / progress.total) * 100)));
 
   return (
     <div className="mt-2 ml-11">
@@ -1483,7 +1915,7 @@ function StatusBadge({ status }: { status: ConversionStatus }) {
         status === "waiting" && "bg-card/50 text-secondary",
         status === "converting" && "bg-accent/12 text-accent ring-accent/25",
         status === "done" && "bg-good/12 text-good ring-good/25",
-        status === "failed" && "bg-bad/12 text-bad ring-bad/25",
+        status === "failed" && "bg-bad/12 text-bad ring-bad/25"
       )}
     >
       {label}
@@ -1509,7 +1941,7 @@ function MobileActions({
           "inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl px-4 text-sm font-bold transition",
           canConvert
             ? "bg-gradient-to-br from-accent to-accent-2 text-on-accent shadow-[0_8px_22px_rgb(var(--accent-glow)/0.32)]"
-            : "bg-well text-faint",
+            : "bg-well text-faint"
         )}
         disabled={!canConvert}
         onClick={onConvert}

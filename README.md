@@ -2,7 +2,7 @@
 
 一个 macOS 桌面小工具，用来把网易云音乐的 `.ncm` 缓存文件转换为可播放的音频文件。
 
-<img width="1880" height="1360" alt="1" src="https://github.com/user-attachments/assets/92147654-772d-4f79-a470-fdcf8a3b2a14" />
+![NCM 转换器界面预览](public/app-screenshot.png)
 
 ## 功能
 
@@ -14,13 +14,15 @@
 - 队列进度、转换状态和失败详情
 - 转换记录与 Finder 定位
 - macOS 菜单栏入口
+- 转换后可按歌手或专辑自动整理目录
+- 应用内检查 GitHub Release 更新
 - 深色半透明磨砂界面
 
 ## 下载
 
 请到 GitHub Releases 下载最新版 DMG：
 
-- `NCM 转换器_0.1.0_aarch64.dmg`
+- `NCM 转换器_1.0.0_aarch64.dmg`
 
 当前构建面向 Apple Silicon Mac。
 
@@ -59,6 +61,14 @@ npm run desktop:dev
 ```bash
 npm run desktop:build
 ```
+
+发布到 GitHub Release：
+
+```bash
+npm run release:github
+```
+
+发布脚本会先构建并验证 DMG，再创建或更新 `v当前版本号` 的 Release。默认要求工作区无未提交修改；临时发布可设置 `ALLOW_DIRTY_RELEASE=1`。
 
 构建产物会生成在：
 

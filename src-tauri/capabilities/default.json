@@ -21,11 +21,7 @@
         {
           "name": "binaries/ncmdump",
           "sidecar": true,
-          "args": [
-            { "validator": "\\S+" },
-            "-o",
-            { "validator": "\\S+" }
-          ]
+          "args": true
         }
       ]
     }

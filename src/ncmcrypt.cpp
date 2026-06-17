@@ -325,7 +325,8 @@ NeteaseCrypt::ErrorCode NeteaseCrypt::FixMetadata()
 
 NeteaseCrypt::ErrorCode NeteaseCrypt::Dump(std::string const &outputDir,
                                           NcmProgressCallback cb,
-                                          void *userdata)
+                                          void *userdata,
+                                          DuplicateMode duplicateMode)
 {
 	mProgressCallback = cb;
 	mProgressUserdata = userdata;
@@ -370,6 +371,28 @@ NeteaseCrypt::ErrorCode NeteaseCrypt::Dump(std::string const &outputDir,
 					mFormat = NcmFormat::FLAC;
 				}
 				mFormatDetected = true;
+
+				if (std::filesystem::exists(mDumpFilepath)) {
+					if (duplicateMode == DuplicateMode::Skip) {
+						setError(ErrorCode::ErrOutputExists,
+						         "Output file already exists: " + mDumpFilepath.u8string());
+						return mErrorCode;
+					}
+					if (duplicateMode == DuplicateMode::Rename) {
+						auto base = mDumpFilepath.parent_path() / mDumpFilepath.stem();
+						auto ext = mDumpFilepath.extension();
+						for (int i = 2; i < 10000; ++i) {
+							auto candidate = base;
+							candidate += " ";
+							candidate += std::to_string(i);
+							candidate += ext;
+							if (!std::filesystem::exists(candidate)) {
+								mDumpFilepath = candidate;
+								break;
+							}
+						}
+					}
+				}
 
 				output.open(mDumpFilepath, std::ofstream::out | std::ofstream::binary);
 				if (!output.is_open()) {

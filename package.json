@@ -1,6 +1,6 @@
 {
   "name": "ncmdump-mac",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build --bundles app && node scripts/fix-macos-bundle.mjs && node scripts/package-dmg.mjs",
+    "release:github": "node scripts/release.mjs",
     "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
     "lint": "next lint && prettier --check \"app/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\"",
     "format": "prettier --write \"app/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\"",
